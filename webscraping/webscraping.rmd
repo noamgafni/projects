@@ -1,0 +1,188 @@
+---
+title: "Webscraping"
+author: "Noam Gafni"
+date: "2025-05-25"
+output: html_document
+---
+
+```{r}
+source("STA141BHW4.R")
+```
+
+## Task 1
+
+### Exploration
+
+-   I searched the files in the network tab of the developer tools until I found a json file named "search" that contained the information that I wanted to extract.
+-   I kept adding random headers to try to bypass the verification system until it worked. Luckily I didn't have to use the cookie, which expires, so I don't have to update my header periodically.
+-   Once I got access to JSON file I looked at the nested list (llist) in R, and dug around until I found the df that I wanted to extract (hits).
+-   I then added another column in the df and set it to the search query so that I could do some verification with the resulting dataframes (making my salary box plot).
+
+```{r}
+ds  <- jobscrape("Data Scientist")
+st  <- jobscrape("Statistician")
+da  <- jobscrape("Data Analyst")
+pr  <- jobscrape("Programmer")
+ml  <- jobscrape("Machine Learning")
+ai  <- jobscrape("Artificial Intelligence") 
+```
+
+```{r}
+head(ds)
+head(st)
+head(da)
+head(pr)
+head(ml)
+head(ai)
+```
+
+I used chatGPT to help me get every 6 choose 2 combination of 2 job titles to see how many links are overlapping
+
+```{r}
+#overlapping links for programmer and data analyst
+link_lists <- c(pr$job_posting_link, da$job_posting_link) 
+length(link_lists[duplicated(link_lists)])
+
+job_dfs <- list(
+  ds = ds,
+  st = st,
+  da = da,
+  pr = pr,
+  ml = ml,
+  ai = ai
+)
+ 
+job_pairs <- combn(names(job_dfs), 2, simplify = FALSE)
+ 
+overlap_results <- lapply(job_pairs, function(pair) {
+  links1 <- job_dfs[[pair[1]]]$job_posting_link
+  links2 <- job_dfs[[pair[2]]]$job_posting_link
+  overlap <- intersect(links1, links2)
+  data.frame(
+    job1 = pair[1],
+    job2 = pair[2],
+    overlap_count = length(overlap)
+  )
+})
+
+ 
+overlap_summary <- do.call(rbind, overlap_results) 
+print(overlap_summary)
+```
+
+It appears that data scientist and programmer have the highest amount of overlap at 983 links (job postings). This is quite high considering that we set our limit to 1000 links.
+
+```{r}
+nrow(ds)
+nrow(da)
+```
+
+These searches both have 1000 results, meaning that one job title isn't fully contained in the other.
+
+Next I wanted to see how the average salary compares between positions
+
+```{r}
+all_jobs <- bind_rows(ds, st, da, pr, ml, ai)
+
+#Since it was optional for the companies to put average salaries, I made sure to only look at the non NA values for the salaries
+ggplot(all_jobs %>% filter(!is.na(salary_avg)), aes(x = job, y = salary_avg)) +
+  geom_boxplot(fill = "#0eacf1") +
+  labs(
+    title = "Salary Distribution by Job Title",
+    x = "Job Title",
+    y = "Average Salary"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+The jobs resulting from Machine Learning as a query has the highest average, as well as the most outliers.
+
+## Task 2
+
+### Selenium
+
+When I started task 2 I thought I would just be able to use the simple Selenium function that Duncan provided to us on GitHub in order to extract all of the HTMLs. After running that code I searched through a few html files at random and noticed that some of them were surprisingly short. After manually investigating those html files (and the links in which those files are contained), I realized that they all had a pop up that said something to the effect of "accept all cookies". I then researched how I could bypass this pop up to get the actual HTML file underneath. I then reran all of my websites through the altered selenium function (this was before Duncan informed us that we can just run the function on a subset of the urls ☹️). After manually inspecting the same HTMLs that were previously blocked due to the cookie pop up, I saw that the bypass worked, but due to the interest of time I was not able to run new selenium functions to perfectly extract all 1000 HTML files.
+
+I locally stored the list of HTML files so that I would not have to worry about writing over it, and I wouldn't have to risk rerunning the entire selenium function (extract_html
+
+```{r}
+html1 <- readRDS("HTML1.RDS")
+```
+
+### Task 2 Part 1 (Common Headers)
+
+#### Exploration
+
+-   After manually searching through 20-30 websites manually, I felt like I got a generally good idea of what the headers said, so I wanted to make sure that my function could replicate those headers
+
+#### Approach
+
+-   I wrote a function that got all of the headers from all of the HTML files (that I have stored as strings) but I quickly realized that there were very similar headers (such as "responsibilities" and "key responsibilities")
+
+-   Because of this, I decided to make another function that took the titles I found using XML and my own keywords as inputs, and spat out a table that combined these common titles together.
+
+-   The counts in this frequency seem a little bit low, since from my (limited) manual exploration, most sites had a "responsibilities" (or any similar title), yet this function clocked less than half of these sites having such a header
+
+    -   I grew increasingly concerned since at the bottom of the list I got "maximum storage duration", which was not a header that I encountered when looking at these websites. This suggests that my second passing of extracting the HTMLs using selenium did not scrape the correct HTMLs for every single website, but in the interest of time I decided to continue with the second part of task 2.
+
+```{r}
+titles <- extract_section_titles(html1)
+combined_titles <- combine_similar_titles(titles, keywords)
+head(sort(table(combined_titles), decreasing = TRUE), 10)
+```
+
+### Task 2 Part 2 (Common Words/Phrases)
+
+#### Approach
+
+-   I wanted to look at all of the regular text UNDER the headers that I had previously used in the previous part
+
+-   First I get all of the regular text, then I wanted to clean up any stop words, and finally I sorted the frequency of each word in descending order
+
+    -   Note that for my stopwords function I removed any words that are 2 or less characters long, just because I can't think of any integral words of that length
+
+```{r}
+get_common_words(html1)
+```
+
+#### Analysis
+
+-   Most of these words seem appropriate after reading some of the job application sites, but there are some troubling words in the mix
+
+    -   cookies: implies that I still did not get past some barrier when opening the site, (need to run another iteration of my function that uses selenium)
+
+    -   insenior: I don't know what this means or how this got up so high on the list
+
+### Getting Common Phrases Among Sites
+
+#### Approach
+
+-   I wanted to find phrases between 2 and 5 words that were shared between the websites.
+
+    -   I only looked at the text underneath the headers we previously extracted, since I didn't want to add fluff
+
+#### Challenges
+
+-   In my resulting table, there are some phrases that can be nested in larger phrases.
+
+    -   Ex: "available work", "available work visa", "available work visa sponsorship"
+
+-   I wanted to figure out a way such that if a phrase is a subset of another phrase on the list, that phrase would get eliminated from the table. I needed to make sure that the full phrase and the subset phrase had the same frequency (only other option is if the subset has a higher frequency, implying that it was used in a phrase that was not the full "parent" phrase).
+
+```{r}
+get_common_phrases(html1)
+```
+
+#### Validation
+
+```{r}
+gc <- which(sapply(html1, \(x) grepl("government clearance", extract_visible_text(x), ignore.case = TRUE)))
+ds$job_posting_link[head(gc)]
+```
+
+-   Since government clearance was one of the phrases (that seemed off), I wanted to check to see which websites had that in their HTML files, and see if they actually used the phrase
+
+    -   Alas, they did not, which means that I most likely had an error when scraping all of these files, but that makes sense considering I only had time to bypass the cookie pop up, without being able to refine my scraping technique.
+
+-   That being said, most of the phrases in the table appear to be plausible (although since some of the HTML files are not accurately represented in html1, the frequency of these phrases are most likely lower than in reality).
